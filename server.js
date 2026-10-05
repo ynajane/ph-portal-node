@@ -23,7 +23,6 @@ const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const rnd = () => crypto.randomBytes(32).toString('hex');
 const q = (text, p) => db.query(text, p);
 const G = 'Invalid email or password. If your account is locked, check your email for the unlock link.';
-const DUMMY = await hashPassword('dummy-password-for-timing');   // so unknown emails cost the same as real ones
 
 const app = express();
 // Trust X-Forwarded-For ONLY when really behind a proxy (Nginx/Cloudflare): set TRUST_PROXY=1 (number of proxy hops) in .env.
@@ -55,6 +54,16 @@ async function sendVerify(first, em, raw) {
     `Dear ${first},\n\nThank you for registering with ${APP}. We are thrilled to welcome you to our community.\n\nTo ensure the security of your account and complete your registration, please verify your email address by clicking the secure link below:\n\n${link}\n\nIf you did not initiate this request, please disregard this message. This link will expire in 24 hours for your protection.\n\nWarm regards,\nThe ${APP} Security Team`,
     `<p>Dear ${first.replace(/[<>&"]/g, '')},</p><p>Thank you for registering with ${APP}. We are thrilled to welcome you to our community.</p><p>To ensure the security of your account and complete your registration, please verify your email address by clicking the secure link below:</p><p><a href="${link}" style="background:#0b3a5b;color:#fff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:bold">Verify My Email Address</a></p><p>If you did not initiate this request, please disregard this message. This link will expire in 24 hours for your protection.</p><p>Warm regards,<br>The ${APP} Security Team</p>`);
 }
+// Issue a fresh 24h verification link. Cooldown (60 s) stops anyone from using the login form to spam an inbox.
+async function reissueVerify(u) {
+  const last = (await q(`select extract(epoch from now()-created_at) age from verification_tokens where user_id=$1 and type='email_verify' order by created_at desc limit 1`, [u.id])).rows[0];
+  if (last && last.age < 60) return { sent: false, wait: Math.ceil(60 - last.age) };
+  const raw = rnd();
+  await q(`delete from verification_tokens where user_id=$1 and type='email_verify'`, [u.id]);
+  await q(`insert into verification_tokens(user_id,token_hash,type,expired_at) values($1,$2,'email_verify',now()+interval '24 hours')`, [u.id, sha(raw)]);
+  try { await sendVerify(u.first_name, u.email, raw); } catch (err) { console.error('verification email failed:', err.message); return { sent: false, failed: true }; }
+  return { sent: true };
+}
 async function auth(req, res, next) {
   const sid = req.cookies?.sid;
   const r = sid && (await q(`select u.* from sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now()`, [sha(sid)])).rows[0];
@@ -73,17 +82,8 @@ async function otpAuth(req, res, next) {
   }
   return auth(req, res, next);   // otherwise a normal logged-in session
 }
-// Login feedback: shows attempts left WITHOUT revealing whether the email exists (unknown emails get a fake counter).
-const ghosts = new Map();
-function ghostFail(em) {
-  const now = Date.now(), g = ghosts.get(em);
-  const n = g && g.exp > now ? g.n + 1 : 1;
-  ghosts.set(em, { n, exp: now + 24 * 36e5 });
-  if (ghosts.size > 5000) ghosts.delete(ghosts.keys().next().value);
-  return n;
-}
 const attemptMsg = (n) => (n >= 3
-  ? 'Too many failed attempts. If this account exists, it is now locked and an unlock link was sent to its email. Check your inbox (the link works after a 2-minute wait).'
+  ? 'Too many failed attempts. This account is now locked and an unlock link was sent to its email. Check your inbox (the link works after a 2-minute wait).'
   : `Invalid email or password. ${3 - n} attempt${3 - n === 1 ? '' : 's'} left before the account is locked.`);
 async function safeUnlock(u) { try { await sendUnlock(u); } catch (err) { console.error('unlock email failed:', err.message); } }
 
@@ -131,12 +131,7 @@ const resendLimiter = rateLimit({ windowMs: 36e5, limit: 5, standardHeaders: tru
 app.post('/api/resend-verification', resendLimiter, requireCsrf, async (req, res) => {
   const em = String(req.body?.email ?? '').trim().toLowerCase();
   const u = em && (await q('select id,first_name,email from users where email=$1 and email_verified_at is null', [em])).rows[0];
-  if (u) {
-    const raw = rnd();
-    await q(`delete from verification_tokens where user_id=$1 and type='email_verify'`, [u.id]);
-    await q(`insert into verification_tokens(user_id,token_hash,type,expired_at) values($1,$2,'email_verify',now()+interval '24 hours')`, [u.id, sha(raw)]);
-    try { await sendVerify(u.first_name, u.email, raw); } catch (err) { console.error('verification email failed:', err.message); }
-  }
+  if (u) await reissueVerify(u);
   res.json({ ok: true });
 });
 
@@ -149,28 +144,31 @@ app.get('/verify-email', async (req, res) => {
   res.redirect('/?verified=ok');
 });
 
-// Login: generic errors, constant-ish timing, 3-strike lock + unlock email with 2-minute cooling period
+// Login order: 1) is the email registered?  2) is it verified? (if not, send a new link)  3) is the account locked?  4) password check
+// (3-strike lock + unlock email with 2-minute cooling period)
 app.post('/api/login', loginLimiter, requireCsrf, async (req, res) => {
   const em = String(req.body?.email ?? '').trim().toLowerCase(), pw = String(req.body?.password ?? '');
-  if (!em || !pw || pw.length > 128) return res.status(400).json({ error: G });
+  if (!em) return res.status(400).json({ error: 'Enter your email address.', code: 'bad_input' });
   const u = (await q('select * from users where email=$1', [em])).rows[0];
-  if (!u) {                                   // unknown email: behave EXACTLY like a real account (same counter, same messages)
-    await verifyPassword(DUMMY, pw).catch(() => {});
-    return res.status(401).json({ error: attemptMsg(ghostFail(em)) });
+  if (!u) return res.status(404).json({ error: 'This email is not registered yet. Create an account to get started.', code: 'not_registered' });
+  if (!u.email_verified_at) {
+    const r = await reissueVerify(u);
+    const msg = r.sent ? `Your email is not verified yet. We sent a new verification link to ${u.email.replace(/^(.).*(@.*)$/, '$1***$2')}. Click it, then log in.`
+      : r.failed ? 'Your email is not verified yet, and we could not send a new link. Please try again shortly.'
+      : `Your email is not verified yet. A link was sent a moment ago. Check your inbox, or request another in ${r.wait} seconds.`;
+    return res.status(403).json({ error: msg, code: 'unverified' });
   }
+  if (!pw || pw.length > 128) return res.status(400).json({ error: G, code: 'bad_input' });
   if (u.is_locked) {
-    await verifyPassword(DUMMY, pw).catch(() => {});
     if (!(await q(`select 1 from verification_tokens where user_id=$1 and type='account_unlock' and expired_at>now()`, [u.id])).rowCount) await safeUnlock(u);
-    return res.status(401).json({ error: attemptMsg(3) });
+    return res.status(401).json({ error: attemptMsg(3), code: 'locked' });
   }
   if (!(await verifyPassword(u.password_hash, pw).catch(() => false))) {
     const n = u.failed_login_attempts + 1;
     if (n >= 3) { await q(`update users set failed_login_attempts=$2,is_locked=true,lockout_until=now()+interval '2 minutes',updated_at=now() where id=$1`, [u.id, n]); await safeUnlock(u); }
     else await q('update users set failed_login_attempts=$2,updated_at=now() where id=$1', [u.id, n]);
-    return res.status(401).json({ error: attemptMsg(n) });
+    return res.status(401).json({ error: attemptMsg(n), code: 'bad_password' });
   }
-  // Only someone who knows the password learns the account is unverified (no email enumeration)
-  if (!u.email_verified_at) return res.status(403).json({ error: 'Please verify your email address first (check your inbox).' });
   await q('update users set failed_login_attempts=0 where id=$1', [u.id]);
   const sid = rnd();
   await q(`insert into sessions(token_hash,user_id,expires_at) values($1,$2,now()+interval '8 hours')`, [sha(sid), u.id]);

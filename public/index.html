@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Activity #2</title><link rel="icon" href="data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="%23c8102e" stroke="%23f2b632" stroke-width="2"/><path fill="%23fff" fill-rule="evenodd" d="M16 4.5l10.5 23h-5l-1.6-4h-7.8l-1.6 4h-5zM16 12.6l-2.5 6.1h5z"/></svg>"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Activity #2</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23c8102e' stroke='%23f2b632' stroke-width='2'/%3E%3Cpath fill='%23fff' fill-rule='evenodd' d='M16 4.5l10.5 23h-5l-1.6-4h-7.8l-1.6 4h-5zM16 12.6l-2.5 6.1h5z'/%3E%3C/svg%3E"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--sea:#10265a;--red:#c8102e;--mango:#f2b632;--ink:#17222d;--mist:#eef3f7;--bad:#b3261e;--ok:#1b7f4b}
 *{box-sizing:border-box}body{margin:0;font:15px/1.5 Poppins,system-ui,sans-serif;color:var(--ink);background:var(--mist)}
@@ -91,6 +91,27 @@ nav{padding:.6rem clamp(1rem,2.5vw,2rem);background:rgba(11,27,68,.94);backdrop-
 .h{border-left:4px solid var(--sea);border-radius:10px}.h:has(.b1){border-left-color:var(--mango)}.h:has(.b2){border-left-color:var(--ok)}.h small{color:var(--soft)}
 @keyframes pop{from{opacity:0;transform:translateY(-6px) scale(.98)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---- auth / registration form: small-phone responsiveness ---- */
+#auth .grid{grid-template-columns:minmax(0,1fr)}#auth .grid>*{min-width:0}#auth .wide{grid-column:auto}
+@media(min-width:600px){#auth .grid{grid-template-columns:repeat(2,minmax(0,1fr))}#auth .wide,#auth .sec{grid-column:1/-1}}
+#auth .sec{grid-column:1/-1}
+#auth label,#auth .combo,#auth .pw{display:block;min-width:0}
+#auth .row:has(.pre){flex-wrap:nowrap;gap:.4rem}#auth .row:has(.pre) input{flex:1;min-width:0;width:auto;margin-top:0}
+#auth .pre{flex:none;padding:.7rem .6rem;font-weight:600}
+#auth input,#auth select{min-width:0;padding:.7rem .75rem}
+.rules{gap:.15rem .7rem}
+@media(max-width:480px){
+ #auth{padding:.5rem;align-items:flex-start}
+ #auth .card{margin:.5rem auto;border-radius:12px}
+ .banner{padding:.9rem 1rem;gap:.7rem}.banner svg{width:38px;height:38px}.brand{font-size:1.25rem}.banner p{font-size:.78rem}
+ .cb{padding:1rem}
+ #auth .tabs button{padding:.6rem .4rem;font-size:.9rem}
+ .row .pre+input{min-width:0}
+ .sug .row{flex-direction:column;align-items:stretch}.sug code{display:block}
+ #otp .row{flex-wrap:nowrap}#otp .row button{flex:1}
+}
+@media(max-width:340px){.cb{padding:.8rem}.brand{font-size:1.1rem}.banner p{display:none}}
 </style></head><body>
 <main id="auth"><div class="card"><div class="banner"><svg width="46" height="46" viewBox="0 0 32 32" role="img" aria-label="Activity #2 logo"><circle cx="16" cy="16" r="14" fill="#c8102e" stroke="#f2b632" stroke-width="2"/><path fill="#fff" fill-rule="evenodd" d="M16 4.5l10.5 23h-5l-1.6-4h-7.8l-1.6 4h-5zM16 12.6l-2.5 6.1h5z"/></svg><div><h1 class="brand">Activity #2</h1><p>Registration, verification &amp; Philippine holidays</p></div></div><div class="cb"><div class="tabs"><button id="tl">Log in</button><button class="ghost" id="tr">Create account</button></div><div id="note"></div>
 <form id="login"><div class="grid"><div class="wide"><label>Email<input name="email" type="email" required autocomplete="username"></label><div class="err" id="l_email"></div></div><div class="wide"><label class="blk" for="l_pw">Password</label><div class="pw"><input id="l_pw" name="password" type="password" required autocomplete="current-password"></div><div class="err" id="l_password"></div></div></div><p class="err" id="lerr"></p><button class="alt sub">Log in</button><p class="sw">New here? <a data-go="reg">Create an account</a></p></form>
@@ -154,7 +175,7 @@ async function init(){csrf=(await api('csrf')).d.csrf;
  if(vOk)return otpFlow();const me=await api('me');me.ok?gate(me.d):show('login')}
 $('#tl').onclick=()=>show('login');$('#tr').onclick=()=>show('reg');
 $('#login').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);if([...e.target.querySelectorAll('input')].map(lchk).some(Boolean))return;const r=await api('login',Object.fromEntries(f));
- if(r.ok){gate((await api('me')).d)}else{$('#lerr').innerHTML=esc(r.d.error)+(/verify your email/i.test(r.d.error)?' <a href="#" id="rv">Resend verification email</a>':'');const rv=$('#rv');if(rv)rv.onclick=async ev=>{ev.preventDefault();await api('resend-verification',{email:f.get('email')});$('#lerr').textContent='If that account is unverified, a new link was sent.'}}};
+ if(r.ok){gate((await api('me')).d)}else{$('#lerr').innerHTML=esc(r.d.error)+(r.d.code==='not_registered'?' <a href="#" data-go="reg">Create an account</a>':'')}};
 $('#reg').onsubmit=async e=>{e.preventDefault();let nb=0;for(const[n]of F){touched.add(n);if(chk(n))nb++}if(nb){$('#rerr').textContent='Please fix the highlighted fields.';return}$('#rerr').textContent='';const r=await api('register',Object.fromEntries(new FormData(e.target)));
  if(r.d.errors){for(const[k,v]of Object.entries(r.d.errors))$('#e_'+k).textContent=v;$('#rerr').textContent='Please fix the highlighted fields.'}
  else if(!r.ok)$('#rerr').textContent=r.d.error;
